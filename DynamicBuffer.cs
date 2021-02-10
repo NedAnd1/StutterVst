@@ -7,16 +7,37 @@ using System.Runtime.InteropServices;
 
 namespace StutterVst {
 
+	/// <summary>
+	///  Makes the digital signal processing of buffers with multiple sources alot easier,<br/>
+	///  whether external (created by the VST host) or internal (created by the plugin for repeated samples).
+	/// </summary>
 	internal unsafe class DynamicBuffer
 	{
 		private int channelCount;
 		private int internalStart;
 		private int internalCount;
 		private float* internalBase;
+
+		/// <summary>
+		///  This array stores references to an unmanaged buffer for each channel (usually provided by the VST host) 
+		/// </summary>
 		private float** attachedBase;
+
+		/// <summary>
+		///  The capacity of the plugin's internal buffers grow by powers of 2, so a growth increments the capacityExponent by 1
+		/// </summary>
 		private int capacityExponent;
-		private float* currentPosition;
+
+		/// <summary>
+		///  Refers to the current sample in our internal buffer (set by <see cref="Seek(int)"/> when the sample is internal).
+		/// </summary>
+		private float* internalPosition;
+
+		/// <summary>
+		///  The relative index of the current sample in the external buffer (set by <see cref="Seek(int)"/> when the sample is external).
+		/// </summary>
 		private int currentSampleIndex;
+
 		public DynamicBuffer(int channelCount, uint initialCapacity= 1)
 		{
 			#region Set Capacity to Next Power of Two
@@ -45,25 +66,29 @@ namespace StutterVst {
 			attachedBase= (float**) Marshal.AllocHGlobal( sizeof(float*) * channelCount );
 			this.channelCount= channelCount;
 			currentSampleIndex= 0;
-			currentPosition= null;
+			internalPosition= null;
 			internalStart= 0;
 			internalCount= 0;
 		}
 
+		/// <summary>
+		///  Integrates the given external buffers for seamless use alongside any internal buffers.
+		/// </summary>
 		public int Attach(float*[] attachedBase, int sampleDelta)
 		{
-			if ( channelCount < (channelCount= attachedBase.Length) )
+			if ( channelCount < (channelCount= attachedBase.Length) ) // if # of channels change, we need to recreate the array thats stores the references to their buffers
 			{
 				Marshal.FreeHGlobal( (IntPtr) this.attachedBase );
 				this.internalBase= (float*) Marshal.ReAllocHGlobal( (IntPtr) this.internalBase, (IntPtr) ( sizeof(float) * channelCount << capacityExponent ) );
 				this.attachedBase= (float**) Marshal.AllocHGlobal( sizeof(float*) * channelCount );
 			}
 			for ( int i= 0; i < channelCount; ++i )
-				this.attachedBase[i]= attachedBase[i];
-			if ( sampleDelta >= 0 && sampleDelta < internalCount )
+				this.attachedBase[i]= attachedBase[i]; // copies only the references to each channel's external buffer
+
+			if ( sampleDelta >= 0 && sampleDelta < internalCount ) // if the host wants to jump forwards in time to a point where samples are still in the queue
 			{
-				internalCount-= sampleDelta;
-				internalStart+= sampleDelta;
+				internalCount-= sampleDelta; // previous samples are 'forgotten'
+				internalStart+= sampleDelta;  // & the queue advances forward
 				if (  internalStart >> capacityExponent  !=  0  )
 					internalStart-= 1 << capacityExponent;
 			}
@@ -74,8 +99,10 @@ namespace StutterVst {
 			return internalCount;
 		}
 
-		/// <summary> Internally save the given input samples from `minSampleIndex` (inclusive) to `maxSampleIndex` (exclusive). </summary>
-		public void Detach(int minSampleIndex, int maxSampleIndex)
+		/// <summary>
+		///  Saves the given input samples between `minSampleIndex` and `maxSampleIndex` to our internal buffer.
+		/// </summary>
+		public void Save(int minSampleIndex, int maxSampleIndex)
 		{
 			internalStart+= minSampleIndex;
 			minSampleIndex-= internalCount;
@@ -168,7 +195,9 @@ namespace StutterVst {
 			}
 		}
 
-		/// <summary> Make sure `sampleIndex` is less than count returned by `Attach` plus count you attached. </summary>
+		/// <summary>
+		///  Make sure `sampleIndex` is less than internal count returned by `Attach` plus external count attached.
+		/// </summary>
 		public void Seek(int sampleIndex)
 		{
 			if ( sampleIndex < internalCount )
@@ -176,28 +205,32 @@ namespace StutterVst {
 				sampleIndex+= internalStart;
 				if (  sampleIndex >> capacityExponent  !=  0  ) // if index is greater than buffer capacity, rotate back to beginning
 					sampleIndex-= 1 << capacityExponent;
-				currentPosition= internalBase + sampleIndex;
+				internalPosition= internalBase + sampleIndex;
 			}
 			else {
 				currentSampleIndex= sampleIndex - internalCount;
-				currentPosition= null;
+				internalPosition= null;
 			}
 		}
 
-		/// <summary> Call seek for each sample before getting its value for a specific channel! </summary>
+		/// <summary>
+		///  Call seek for each sample before getting its value for a specific channel!
+		/// </summary>
 		public float this [ int channelIndex ]
 		{
 			get {
-				if ( currentPosition != null )
-					return currentPosition [ channelIndex << capacityExponent ];
+				if ( internalPosition != null )
+					return internalPosition [ channelIndex << capacityExponent ];
 				else return attachedBase [ channelIndex ] [ currentSampleIndex ];
 			}
 		}
 
-		/// <summary> Prioritize seeking to the sample instead of using this getter.  </summary>
+		/// <summary> For accessing samples out of order. </summary>
 		public float this [ int channelIndex, int sampleIndex ]
 		{
 			get {
+				if ( sampleIndex < 0 )
+					sampleIndex= 0;
 				if ( sampleIndex < internalCount )
 				{
 					sampleIndex+= internalStart;

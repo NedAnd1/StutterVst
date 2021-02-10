@@ -9,24 +9,36 @@ using Jacobi.Vst.Framework;
 
 namespace StutterVst
 {
+	/// <summary>
+	///  Here stands the gateway between the VST host and the plugin.
+	/// </summary>
 	internal sealed class Plugin: ApplicationBase, IVstPlugin
 	{
-		/// <summary> Please don't make me have to track down the interfaceType all by myself. </summary>
+		/// <summary>
+		///  After figuring out the VST interface associated with the given class,
+		///  this method adds that interface to a dictionary
+		///  which `VstInterfaceManager` uses to let the VST host of the optional VST interfaces this plugin supports.
+		/// </summary>
 		public static void AddVstClass<classType>(Type interfaceType= null)
 		{
 			vstConstructorsByInterface.Add( interfaceType ?? __findVstInterface( typeof(classType) ), VstConstructor.Get<classType>() );
 		}
 
-		/// <summary> A more reliable and explicit way of adding support for VST interfaces to a plugin. </summary>
+		/// <summary>
+		///  A more reliable and explicit way of adding support for VST interfaces to a plugin (besides placing entries directly in our dictionary's initializer).
+		/// </summary>
 		public static void AddVstInterface<interfaceType>(VstConstructor constructor)
 		{
 			vstConstructorsByInterface.Add( typeof(interfaceType), constructor );
 		}
 
+		/// <summary>
+		///	 These are the VST interfaces our plugin supports with the contructors the VST host can call to create them.
+		/// </summary>
 		private static Dictionary<Type, VstConstructor> vstConstructorsByInterface=
 			new Dictionary<Type, VstConstructor> 
 			{
-				//{ typeof(IVstPluginEditor), new VstConstructor ( (Plugin creator) => creator.mainView= new MainView(creator) ) },
+				//{ typeof(IVstPluginEditor), new VstConstructor ( (Plugin creator) => creator.mainView= new MainView(creator) ) }, // VST host provides our GUI
 				{ typeof(IVstPluginAudioProcessor), new VstConstructor ( (Plugin creator) => creator.audioProcessor= new AudioProcessor(creator) ) },
 				{
 					typeof(IVstPluginParameters),
@@ -111,9 +123,14 @@ namespace StutterVst
 
 		#endregion
 
+		/// <summary>
+		///  Used by `VstInterfaceManager` to keep track of interfaces that have already been constructed.
+		/// </summary>
 		private Hashtable vstInstancesByInterface= new Hashtable();
 
-		/// <summary> Represents a constructor for a VST interface that assumes it can be called concurrently by multiple plugins, but only once by a single plugin. </summary>
+		/// <summary>
+		///  Represents a constructor for a VST interface that assumes it can be called concurrently for multiple plugin instances, but only once for a single plugin instance.
+		/// </summary>
 		public struct VstConstructor
 		{
 			private Delegate @base;
@@ -201,6 +218,9 @@ namespace StutterVst
 
 		#region Private Classes and Methods
 
+			/// <summary>
+			///  This class is the glue that binds the `vstConstructorsByInterface` dictionary used by the plugin to the interface methods used by VST host.
+			/// </summary>
 			private static class VstInterfaceManager<T>
 				where T : class // interface
 			{

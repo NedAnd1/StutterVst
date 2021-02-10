@@ -3,21 +3,50 @@
 namespace StutterVst
 {
 	using static ApplicationBase.RandomParameter;
+
+	/// <summary>
+	///  The <see cref="Plugin"/> class extends this class to encapsulate application-wide parameters and data for each plugin instance.
+	/// </summary>
 	internal abstract class ApplicationBase
 	{
 		public MainView mainView;
 		public AudioProcessor audioProcessor;
 		public PresetsManager presetManager;
+
+		/// <remarks>
+		///  Not really used by the plugin, but could be useful in the future.
+		/// </remarks>
 		public volatile bool isPaused;
+
+		/// <summary>
+		///  The threshold--used by the plugin's <see cref="AudioProcessor"/>--can be changed at any time on behalf of the VST host or by the plugin itself.
+		/// </summary>
+		public volatile float thresholdParameter= 0.125f;
+
 		/*
+		// more extreme stutters
 		public static RandomParameter StutterInterval= new RandomParameter(10, 30, BiasType.None);
 		public static RandomParameter StutterDuration= new RandomParameter(1.0/24, 1, BiasType.LowerCircle);
 		public static RandomParameter ConsecutiveRepetitions= new RandomParameter(1, 5, BiasType.Squared);
 		*/
-		public volatile float thresholdParameter= 0.125f;
+
+		/// <summary>
+		///  An even distribution of random numbers between 4 and 6.
+		/// </summary>
 		public static RandomParameter StutterInterval= new RandomParameter(4, 6, BiasType.None);
+
+		/// <summary>
+		///  Random number between 1/24 and 1/4 (more likely to be lower).
+		/// </summary>
 		public static RandomParameter StutterDuration= new RandomParameter(1.0/24, 0.25, BiasType.LowerCircle);
+
+
+		/// <summary>
+		///  Currently always '1'.
+		/// </summary>
 		public static RandomParameter ConsecutiveRepetitions= new RandomParameter(1, 1, BiasType.LowerCircle);
+
+		
 		public struct RandomParameter
 		{
 			BiasType bias;
@@ -32,6 +61,9 @@ namespace StutterVst
 				rGen= new Random();
 			}
 
+			/// <summary>
+			///  Retrieves a randomly generated value based on the parameter's preconditions.
+			/// </summary>
 			public double Value
 			{
 				get {

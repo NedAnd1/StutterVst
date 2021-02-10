@@ -5,6 +5,10 @@ using System.Threading.Tasks;
 using System.ComponentModel;
 
 namespace StutterVst {
+
+	/// <summary>
+	///  Allows the VST host to automate the plugin and create presets for it.
+	/// </summary>
 	internal sealed class PresetsManager: VstPluginProgramsBase
 	{
 		private ApplicationBase creator;
@@ -34,4 +38,5 @@ namespace StutterVst {
 			return programs;
 		}
 	}
+
 }

@@ -6,15 +6,22 @@ using System.Threading.Tasks;
 
 namespace StutterVst
 {
+	/// <summary>
+	///  This class is where the Stutter Magic happens.
+	///  <para>The `Process` method is called by the VST host to apply our effect on the input audio.</para>
+	/// </summary>
 	internal sealed class AudioProcessor: IVstPluginAudioProcessor, IVstPluginBypass, IDisposable
 	{
+		/// <summary>
+		///  The tail size lets the VST host know how long the output audio will continue after the last input sample is given.
+		/// </summary>
 		public const int DefaultTailSize= 0;
 		public const int DefaultBlockSize= 512;
 		public const int DefaultChannelCount= 2;
 		public const float DefaultSampleRate= 44100.0f;
 
 		bool bypass;
-		int tailSize;
+		int tailSize; // our internal buffer's capacity will provide an estimate of how many extra samples we'll be giving back to the VST host
 		int blockSize;
 		float sampleRate;
 		int inputChannelCount;
@@ -27,7 +34,7 @@ namespace StutterVst
 			this.creator= creator;
 			tailSize= DefaultTailSize;
 			blockSize= DefaultBlockSize;
-			sampleRate= DefaultSampleRate;
+			sampleRate= DefaultSampleRate; // the VST host sets the sample rate later on
 			inputChannelCount= DefaultChannelCount;
 			outputChannelCount= DefaultChannelCount;
 		}
@@ -37,55 +44,36 @@ namespace StutterVst
 		private int remainingRepetitions= 0;
 		private float currentStutterInterval= -1;
 		private DynamicBuffer buffer= new DynamicBuffer(DefaultChannelCount);
-		private static float _getVolumeBias(float sampleA, float sampleB, float lastSampleA, float lastSampleB)
-		{
-			lastSampleA-= sampleA;
-			lastSampleB-= sampleB;
-			if ( sampleA < 0 )
-				sampleA= -sampleA;
-			if ( sampleB < 0 )
-				sampleB= -sampleB;
-			float distanceA=  lastSampleA < 0 ?  -lastSampleA : lastSampleA ,
-				  distanceB=  lastSampleB < 0 ?  -lastSampleB : lastSampleB ;
-			float sign= 0;
-			if ( distanceA < sampleA )
-				if ( lastSampleA < 0 )
-					sign+= 0.5f;
-				else sign-= 0.5f;
-			if ( distanceB < sampleB )
-				if ( lastSampleB < 0 )
-					sign+= 0.5f;
-				else sign-= 0.5f;
-			double ratio= ( sampleA * distanceA + sampleB * distanceB ) / 4; // ( sampleA * distanceA * distanceA + sampleB * distanceB * distanceB ) / 8;
-			sampleA+= sampleB - 0.5f;
-			if ( sampleA < 0 )
-				sampleA= 0;
-			return sampleA * 4;// ratio > 6.31e-8 ?  (float) ( Math.Log10(ratio) * 20 + 144 ) * sign : 0 ;
-		}
+
+
+		/// <summary>
+		///  A higher threshold causes the volume bias to be more sensitive to higher amplitudes, making stutters be more likely/frequent.
+		/// </summary>
 		private static float getVolumeBias(float sampleA, float sampleB, float lastSampleA, float lastSampleB, float threshold)
 		{
-			lastSampleA-= sampleA;
-			lastSampleB-= sampleB;
+			float sampleA_steadiness= 1 - Math.Abs( sampleA - lastSampleA ), // sharp rises or falls in amplitude tend towards 0
+			      sampleB_steadiness= 1 - Math.Abs( sampleB - lastSampleB ); // minor changes in amplitude tend towards 1
+
 			if ( sampleA < 0 )
 				sampleA= -sampleA;
+
 			if ( sampleB < 0 )
 				sampleB= -sampleB;
-			if ( lastSampleA > 0 )
-				lastSampleA= 1 - lastSampleA;
-			else ++lastSampleA;
-			if ( lastSampleB > 0 )
-				lastSampleB= 1 - lastSampleB;
-			else ++lastSampleB;
-			double ratio= ( ratio= Math.Sqrt( 1 - lastSampleA * lastSampleA ) ) + ( Math.Sqrt( sampleA ) * ( 1 + threshold ) - threshold ) * ( 1 - ratio )
-						+ ( ratio= Math.Sqrt( 1 - lastSampleB * lastSampleB ) ) + ( Math.Sqrt( sampleB ) * ( 1 + threshold ) - threshold ) * ( 1 - ratio );
+
+			// higher, more unstable amplitudes drive up the 'volume bias'
+			double ratio= ( ratio= Math.Sqrt( 1 - sampleA_steadiness * sampleA_steadiness ) ) + ( Math.Sqrt( sampleA ) * ( 1 + threshold ) - threshold ) * ( 1 - ratio )
+						+ ( ratio= Math.Sqrt( 1 - sampleB_steadiness * sampleB_steadiness ) ) + ( Math.Sqrt( sampleB ) * ( 1 + threshold ) - threshold ) * ( 1 - ratio );
+
 			return  (float) ratio * 8 ;
 		}
+
+
 		public unsafe void Process(float*[] inputChannels, float*[] outputChannels, long hostSamplePosition, int sampleCount)
 		{
 			int L= inputChannels.Length,
 				L2= outputChannels.Length;
 
-			if ( bypass )
+			if ( bypass ) // if the VST host requests a bypass, we simply copy the input samples to the output buffers
 			{
 				if ( L > L2 )
 					L= L2;
@@ -105,42 +93,42 @@ namespace StutterVst
 
 			int inputIndex= repetitionOffset,
 				outputIndex= 0,
-				sampleDelta= (int)( hostSamplePosition - expectedSamplePosition );
+				sampleDelta= (int)( hostSamplePosition - expectedSamplePosition ); // an unexpected jump in the playback position forwards or backwards causes a sample delta, which we may have to compensate for
 			expectedSamplePosition= hostSamplePosition + sampleCount;
-			sampleCount+= buffer.Attach(inputChannels, sampleDelta);
-			if ( sampleDelta != 0 && repetitionOffset != 0 )
+			sampleCount+= buffer.Attach(inputChannels, sampleDelta); // 'attaches' the input buffers to the buffer class we use internally
+			if ( sampleDelta != 0 && repetitionOffset != 0 ) // if the host's playback position jumped unexpectedly, cancels any stutter repetitions in progress
 			{
 				inputIndex= 0;
 				repetitionOffset= 0;
 				remainingRepetitions = 0;
-				currentStutterInterval= (int)( ApplicationBase.StutterInterval.Value * sampleRate );
+				currentStutterInterval= (int)( ApplicationBase.StutterInterval.Value * sampleRate ); // the lower this random value is, the more likely we'll trigger a stutter sooner
 			}
 			while ( outputIndex < blockSize )
 			{
 				//System.Diagnostics.Debug.Assert( inputIndex >= 0 && inputIndex < sampleCount);
 
 				buffer.Seek(inputIndex);
-				for ( int i= 0; i < L; ++i )
-					outputChannels[i][ outputIndex ]= buffer[i];
+				for ( int channelIndex= 0; channelIndex < L; ++channelIndex )
+					outputChannels[ channelIndex ][ outputIndex ]= buffer[ channelIndex ]; // copies samples from our hybrid buffer w/ possible stutters to output buffers provided by the VST host
 				++outputIndex;
 
 				if ( remainingRepetitions <= 0 )
-					if ( --currentStutterInterval <= 0 )
+					if ( --currentStutterInterval <= 0 ) // we trigger on or more stutters when `currentStutterInterval` reaches zero
 					{
 						repetitionOffset= 0;
 						remainingRepetitions= (int) ApplicationBase.ConsecutiveRepetitions.Value;
 						lastStutterDuration= (int)( ApplicationBase.StutterDuration.Value * sampleRate );
 					}
-				else currentStutterInterval-=
-						getVolumeBias(buffer[0], buffer[1], buffer[0,inputIndex>0?inputIndex-1:0], buffer[1,inputIndex>0?inputIndex-1:0], creator.thresholdParameter);
+					else currentStutterInterval-=
+							getVolumeBias(buffer[0], buffer[1], buffer[0, inputIndex-1], buffer[1, inputIndex-1], creator.thresholdParameter);
 
-				if ( remainingRepetitions > 0 && ++repetitionOffset >= lastStutterDuration )
+				if ( remainingRepetitions > 0 && ++repetitionOffset >= lastStutterDuration ) // if a stutter has been triggered & its duration elapsed
 				{
-					--remainingRepetitions;
-					inputIndex-= repetitionOffset - 1;
+					--remainingRepetitions; // 1 less repetition to go
+					inputIndex-= repetitionOffset - 1; // moves the input back to where the stutter started
 					repetitionOffset= 0;
 					if ( remainingRepetitions == 0 )
-						currentStutterInterval= (int)( ApplicationBase.StutterInterval.Value * sampleRate );
+						currentStutterInterval= (int)( ApplicationBase.StutterInterval.Value * sampleRate ); // determines how soon our next stutter is likely to be
 				}
 				else ++inputIndex;
 
@@ -153,204 +141,11 @@ namespace StutterVst
 
 			//if ( repetitionOffset > 0 || remainingRepetitions > 0 )
 			//	System.Diagnostics.Debugger.Break();
-			buffer.Detach(inputIndex-repetitionOffset, sampleCount);
+
+			buffer.Save(inputIndex-repetitionOffset, sampleCount); // saves samples we'll need for stutters in-progress to our internal buffers
 			tailSize= buffer.Capacity;
 			
 		}
-
-		/*
-		private int internalBufferSize= 0;
-		private int internalBufferStart= 0;
-		private bool debugPanic= false;
-		private float[][] internalBuffer; 
-		private const int internalBufferCapacity= (int)( DefaultSampleRate * 240 );
-		private unsafe float*[] internalBufferPointers= null; 
-		private unsafe float*[] floatPointers= new float* [ DefaultChannelCount ];
-		public unsafe void Process(float*[] inputChannels, float*[] outputChannels, long hostSamplePosition, int sampleCount)
-		{
-			int L= inputChannels.Length,
-				L2= outputChannels.Length;
-
-			if ( bypass )
-			{
-				if ( L > L2 )
-					L= L2;
-				for ( int i= 0; i < L; ++i )
-				{
-					float* currentInput= inputChannels[i],
-						   currentOutput= outputChannels[i],
-						   currentInputEnd= currentInput + sampleCount;
-					for ( ; currentInput < currentInputEnd; ++currentInput, ++currentOutput )
-						*currentOutput= *currentInput;
-				}
-				return ;
-			}
-
-			// ToDo: stutter effect process
-			// at a randomized interval,
-			// copy a random but small portion of input to output a small but random number of times
-			// store leftover input in internal buffer which will undergo same process as it's transferred to output
-			if ( currentStutterInterval < 0 )
-				currentStutterInterval= (int)( ApplicationBase.StutterInterval.Value * sampleRate );
-
-			#region Update `internalBufferPointers` and `currentInputs`
-
-				if ( floatPointers.Length < L )
-					floatPointers= new float* [ L ];
-				float*[] currentInputs= floatPointers;
-
-				if ( internalBuffer == null || internalBuffer.Length < L )
-				{
-					internalBuffer= new float [ L ] [];
-					internalBufferPointers= new float* [ L ];
-					for ( int c= 0; c < L; ++c )
-						fixed ( float* buffer= internalBuffer[c]= new float [ internalBufferCapacity ] )
-						{
-							internalBufferPointers[c]= buffer;
-							currentInputs[c]= buffer + internalBufferStart;
-						}
-				}
-				else for ( int c= 0; c < L; ++c )
-						currentInputs[c]= internalBufferPointers[c] + internalBufferStart;
-
-			#endregion
-
-			// if ( L <= 0 ) return ;
-
-			float* currentInputA= currentInputs[0],
-				   bufferStopA= currentInputs[0] + internalBufferSize,
-				   bufferEndA= internalBufferPointers[0] + internalBufferCapacity;
-			if ( bufferStopA > bufferEndA )
-				bufferStopA-= internalBufferCapacity;
-			int inputIndex= 0,
-				outputIndex= 0;
-			int remainingRepetitions= 0;
-			while ( outputIndex < blockSize )
-			{
-				if ( inputIndex < 0
-				if ( inputIndex > bufferSize )
-					inp
-				if ( currentInputA == bufferStopA )
-				{
-					if ( currentInputs != inputChannels )
-					{
-						internalBufferSize= 0;
-						internalBufferStart= 0;
-						currentInputs= inputChannels;
-						currentInputA= currentInputs[0];
-						bufferStopA= currentInputA + sampleCount;
-					}
-					else {
-
-						break;
-					}
-
-				}
-				else if ( currentInputA == bufferEndA )
-				{
-					currentInputs[0]= currentInputA= internalBufferPointers[0];
-					for ( int c= 1; c < L; ++c )
-						currentInputs[c]= internalBufferPointers[c];
-					inputIndex= 0;
-				}
-
-				for ( int c= 0; c < L; ++c )
-					outputChannels[c][ outputIndex ]= currentInputs[c][ inputIndex ];
-			}
-			if ( currentStutterInterval == 0 ) // stuttering at end of buffer
-			{
-			}
-			if ( currentInputs != inputChannels )
-			{
-				internalBufferSize-= inputIndex;
-				internalBufferStart+= inputIndex;
-			}
-			else {
-				internalBufferSize= 0;
-				internalBufferStart= 0;
-			}
-			for ( int c= 0; c < L; ++c )
-			{
-			}
-			if ( currentInputs == inputChannels )
-			{
-			}
-			else {
-				internalBufferStart= currentInputA
-			}
-
-			fixed ( float* buffer= internalBuffer[0] )
-			{
-				float* currentInput= buffer + internalBufferStart,
-					   bufferEnd= buffer + maxDelay,
-					   bufferStop= currentInput + internalBufferSize;
-				float*[] currentInputs= floatPointers;
-				for ( int c= 0; c < L; ++c )
-					fixed ( currentInputs[c]= internalBuffer[c] + internalBufferStart )
-					{
-					}
-				if ( bufferStop > bufferEnd )
-					bufferStop-= maxDelay;
-				while ( true )
-				{
-
-					if ( ++currentInput == bufferEnd )
-						currentInput
-				}
-
-			}
-			// ...
-			sampleCount+= internalBufferSize;
-			for ( int i= internalBufferStart; i < internalBufferSize &&
-			{
-
-			}
-
-			int k2= internalBufferSize;
-			for ( int i= 0; i < inputChannels.Length; ++i )
-				fixed ( float* currentBuffer= internalBuffer[i] )
-				{
-					float* currentInputChannel= inputChannels[i],
-						   currentOutputChannel= outputChannels[i];
-					int j= 0,
-						k= 0;
-					k2= internalBufferSize;
-					for ( j= 0; j < internalBufferSize && k < blockSize; ++j, k+= 2 )
-					{
-						currentOutputChannel[k]= currentBuffer[j];
-						if(k+1<blockSize)currentOutputChannel[k+1]= 0;
-					}
-					for ( k2= 0; j < internalBufferSize; ++j, ++k2 )
-						currentBuffer[k2]= currentBuffer[j]; // move rest of internal buffer to beginning og
-					for ( j= 0; j < sampleCount; ++j, k+= 2 )
-					{
-						if ( k > blockSize  )
-						{
-							if ( k2 < maxDelay )
-							{
-								currentBuffer[k2]= currentInputChannel[j];
-								++k2;
-							}
-							else if ( ! debugPanic )
-							{
-								debugPanic= true;
-								System.Windows.MessageBox.Show("INTERNAL BUFFER FULL!");
-							}
-						}
-						else {
-							currentOutputChannel[k]= currentInputChannel[j];
-							if(k+1<blockSize)currentOutputChannel[k+1]= 0;
-						}
-
-					}
-					if ( i == 0 )
-						tailSize+= k - j;
-					
-				}
-			internalBufferSize= k2;
-
-		}
-		*/
 
 		public struct Pan
 		{
@@ -367,7 +162,7 @@ namespace StutterVst
 			var creator= this.creator as Plugin;
 			if ( creator != null )
 				hostSamplePosition= (long) ( hostSequencer ?? ( hostSequencer= creator.Host.GetInstance<IVstHostSequencer>() ) ).GetTime(0).SamplePosition;
-			else throw new NotImplementedException();
+			else throw new NotSupportedException(); // the VST host should create an instance of the plugin before calling the `Process` method.
 			int sampleCount= 0,
 				L= inputChannels.Length,
 				L2= outputChannels.Length;
@@ -375,7 +170,7 @@ namespace StutterVst
 				inputIntermediary= new float* [ L ];
 			if ( outputIntermediary == null || outputIntermediary.Length != L2 )
 				outputIntermediary= new float* [ L2 ];
-			for ( int i= 0; i < L; ++i )
+			for ( int i= 0; i < L; ++i ) // copies only the references to each channel's buffer over to a managed array of (unmanaged) buffers 
 			{
 				if ( i == 0 )
 					sampleCount= inputChannels[0].SampleCount; // ToDo: make sample count the smallest sample count of all arrays?

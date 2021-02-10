@@ -14,6 +14,9 @@ using System.Windows.Navigation;
 namespace StutterVst
 {
 
+	/// <summary>
+	///  Since we're relying on the VST host for the GUI, this class doesn't really do much.
+	/// </summary>
     public partial class MainView: Window, IVstPluginEditor, IDisposable
     {
 		ApplicationBase creator;
