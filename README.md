@@ -12,6 +12,12 @@ whereas this plugin uses a simple threshold as its single parameter determining 
 
 The threshold can be automated or changed in real time so certain parts of the audio can be more affected by this plugin than other parts.
 
+## Demonstration
+![Screenshot](screenshot.png)
+
+https://user-images.githubusercontent.com/5554478/122579110-9445cd00-d022-11eb-9b26-1e50ea17d83e.mp4
+
+
 ## Support
 It's built with C# on the .Net Framework, using [Vst.Net](https://github.com/obiwanjacobi/vst.net) to interface with most audio editors.<br/>
 Any 32-bit or 64-bit editor that supports [VST](https://en.wikipedia.org/wiki/Virtual_Studio_Technology#VST_hosts) can use this plugin,<br/>
