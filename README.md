@@ -1,4 +1,4 @@
-# StutterVst
+# StutterVst [![.NET](https://github.com/NedAnd1/StutterVst/actions/workflows/dotnet.yml/badge.svg)](https://github.com/NedAnd1/StutterVst/actions/workflows/dotnet.yml)
 Audio plugin for adding randomized stutters based on a threshold.
 
 For an effect that sounds simple enough, I was surprised since I couldn't find a single product that did this.<br/>
