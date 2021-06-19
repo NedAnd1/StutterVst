@@ -8,6 +8,10 @@ on:
 
 jobs:
   build:
+  
+    strategy:
+      matrix:
+        configuration: [Debug, Release]
 
     runs-on: windows-latest
 
@@ -17,9 +21,16 @@ jobs:
       uses: actions/setup-dotnet@v1
       with:
         dotnet-version: 5.0.x
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v1.0.2
     - name: Restore dependencies
-      run: dotnet restore
+      run: |
+           nuget restore StutterVst.sln
+           dotnet restore
     - name: Build
-      run: dotnet build --no-restore
+      #run: dotnet build --no-restore
+      run: msbuild StutterVst.sln /p:Configuration=$env:Configuration
+      env:
+        Configuration: ${{ matrix.configuration }}
     - name: Test
       run: dotnet test --no-build --verbosity normal
